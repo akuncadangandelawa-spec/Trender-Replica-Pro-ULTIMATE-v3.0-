@@ -1,0 +1,560 @@
+//@version=6
+indicator("Trender Replica Pro ULTIMATE [v3.0]", overlay=true, max_labels_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════
+//                         HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════
+
+f_sz(string s) =>
+    switch s
+        "tiny"   => size.tiny
+        "small"  => size.small
+        "normal" => size.normal
+        "large"  => size.large
+        "huge"   => size.huge
+        => size.small
+
+f_pos(string p) =>
+    switch p
+        "top_left"      => position.top_left
+        "top_right"     => position.top_right
+        "bottom_left"   => position.bottom_left
+        "bottom_right"  => position.bottom_right
+        "middle_left"   => position.middle_left
+        "middle_right"  => position.middle_right
+        => position.top_right
+
+// ═══════════════════════════════════════════════════════════════════════
+//                        1. INPUT SETTINGS
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── 1a. Main ──
+grp1      = "1. Main Settings"
+tfMode    = input.string("M1 (1 Minute)", "Timeframe / Mode", options=["M1 (1 Minute)", "M5 (5 Minutes)", "M15 (15 Minutes)"], group=grp1, tooltip="Parameter otomatis menyesuaikan")
+useFilter = input.bool(true, "EMA 200 Trend Filter", group=grp1)
+useADX    = input.bool(true, "ADX Filter", group=grp1)
+adxLen    = input.int(14, "ADX Length", 5, 50, group=grp1)
+adxThresh = input.float(20.0, "ADX Threshold", 5.0, 100.0, step=0.5, group=grp1)
+
+// ── Auto-adjust parameter ──
+[fastLen, slowLen, rsiLen, atrLen, slMult, tpMult] = switch tfMode
+    "M1 (1 Minute)"    => [5,  12, 7,  7,  1.2, 0.6]
+    "M5 (5 Minutes)"   => [8,  20, 9,  10, 1.5, 0.8]
+    "M15 (15 Minutes)" => [12, 26, 14, 14, 2.0, 1.0]
+    => [5, 12, 7, 7, 1.2, 0.6]
+
+// ── 1b. Session Filter ──
+grp2        = "2. Session Filter"
+useSession  = input.bool(false, "Aktifkan Session Filter", group=grp2, tooltip="Batasi trading pada jam likuiditas tinggi")
+sessionTime = input.session("0800-1700", "Trading Session", group=grp2, tooltip="Format HHMM-HHMM (timezone exchange)")
+
+// ── 1c. Multi-TF ──
+grp3  = "3. Multi-TF Confirmation"
+useHTF = input.bool(false, "Aktifkan HTF Confirmation", group=grp3, tooltip="Entry hanya searah tren HTF")
+htfTF  = input.timeframe("60", "Higher Timeframe", group=grp3, tooltip="Pastikan lebih tinggi dari chart")
+
+// ── 1d. Volatility ──
+grp4         = "4. Volatility Filter"
+useVolFilter = input.bool(true, "Aktifkan Volatility Filter", group=grp4, tooltip="Hindari trading saat BB Squeeze")
+bbLen        = input.int(20, "BB Length", 10, 100, group=grp4)
+bbMult       = input.float(2.0, "BB Multiplier", 0.5, 5.0, step=0.1, group=grp4)
+volMinPct    = input.float(50.0, "Min Vol % of Average", 10.0, 100.0, step=5.0, group=grp4, tooltip="BB Width minimum dari rata-ratanya")
+
+// ── 1e. Break-Even ──
+grp5      = "5. Break-Even"
+useBE     = input.bool(true, "Aktifkan Break-Even", group=grp5, tooltip="Pindahkan SL ke entry setelah profit X ATR")
+beTrigger = input.float(1.0, "BE Trigger (x ATR)", 0.5, 10.0, step=0.1, group=grp5)
+beOffset  = input.float(0.1, "BE Offset (x ATR)", 0.0, 5.0, step=0.05, group=grp5, tooltip="SL = Entry + offset kecil")
+
+// ── 1f. Loss Protection ──
+grp6        = "6. Loss Protection"
+useLossLock = input.bool(true, "Aktifkan Loss Lockout", group=grp6, tooltip="Pause trading setelah N loss berturut")
+maxLossLock = input.int(3, "Max Consecutive Losses", 2, 10, group=grp6)
+lockBars    = input.int(20, "Lockout Duration (bars)", 5, 200, group=grp6)
+
+// ── 1g. Risk Management ──
+grp7         = "7. Risk Management"
+riskPct      = input.float(1.0, "Risk per Trade (%)", 0.1, 10.0, step=0.1, group=grp7)
+accountBal   = input.float(10000.0, "Account Balance", 100.0, 10000000.0, step=100.0, group=grp7)
+tickValInput = input.float(1.0, "Tick Value (per lot per tick)", 0.0001, 10000.0, step=0.01, group=grp7, tooltip="Forex major: 1 | Gold: 1 | BTC: sesuai exchange")
+lotDecimals  = input.int(2, "Lot Decimal Places", 0, 4, group=grp7)
+
+// ── 1h. Visual ──
+grp8        = "8. Visual Settings"
+showLabels  = input.bool(true, "Tampilkan Label Chart", group=grp8)
+lblSize     = input.string("small", "Ukuran Font Label", options=["tiny", "small", "normal", "large", "huge"], group=grp8)
+useBarColor = input.bool(true, "Warnai Candle sesuai Posisi", group=grp8, tooltip="Hijau=Long, Merah=Short")
+
+// ── 1i. Dashboard ──
+grp9   = "9. Dashboard"
+showDash = input.bool(true, "Tampilkan Dashboard", group=grp9)
+dashPos  = input.string("top_right", "Posisi Dashboard", options=["top_left", "top_right", "bottom_left", "bottom_right", "middle_left", "middle_right"], group=grp9)
+dashSz   = input.string("small", "Ukuran Font Dashboard", options=["tiny", "small", "normal", "large", "huge"], group=grp9)
+
+// ═══════════════════════════════════════════════════════════════════════
+//                         2. CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── Core Indicators ──
+fastEMA = ta.ema(close, fastLen)
+slowEMA = ta.ema(close, slowLen)
+baseEMA = ta.ema(close, 200)
+rsi     = ta.rsi(close, rsiLen)
+atr     = ta.atr(atrLen)
+[diP, diM, adxVal] = ta.dmi(adxLen, adxLen)
+
+// ── Multi-Timeframe ──
+htfFast  = request.security(syminfo.tickerid, htfTF, ta.ema(close, fastLen))
+htfSlow  = request.security(syminfo.tickerid, htfTF, ta.ema(close, slowLen))
+bool htfBull = useHTF ? htfFast > htfSlow : true
+bool htfBear = useHTF ? htfFast < htfSlow : true
+
+// ── Volatility (BB Width) ──
+[bbMid, bbUp, bbLow] = ta.bb(close, bbLen, bbMult)
+float bbWidth    = (bbUp - bbLow) / bbMid * 100.0
+float bbWidthAvg = ta.sma(bbWidth, 100)
+bool volOK = useVolFilter ? bbWidth > bbWidthAvg * (volMinPct / 100.0) : true
+
+// ── Session ──
+bool inSession = useSession ? not na(time(timeframe.period, sessionTime, syminfo.timezone)) : true
+
+// ── Entry Filters ──
+bool trendBull = useFilter ? close > baseEMA : true
+bool trendBear = useFilter ? close < baseEMA : true
+bool adxOk     = useADX    ? adxVal > adxThresh : true
+
+// ── Signals ──
+bool signalBuy  = ta.crossover(fastEMA, slowEMA) and rsi > 50 and trendBull and adxOk
+bool signalSell = ta.crossunder(fastEMA, slowEMA) and rsi < 50 and trendBear and adxOk
+
+// ── Dashboard helpers (dipanggil setiap bar — fix CW10003/CW10004) ──
+bool isCrossUp = ta.crossover(fastEMA, slowEMA)
+bool isCrossDn = ta.crossunder(fastEMA, slowEMA)
+bool isEMAUp   = fastEMA > slowEMA
+
+// ── Risk Calculations (satu-satunya deklarasi — fix CE10095) ──
+float riskAmt     = accountBal * (riskPct / 100.0)
+float safeATR     = nz(atr, syminfo.mintick * 100)
+float slDistPrice = safeATR * slMult
+float slDistTicks = syminfo.mintick > 0 ? slDistPrice / syminfo.mintick : 0.0
+float riskPerCntr = slDistTicks * tickValInput
+float calcLotSize = riskPerCntr > 0 ? math.round(riskAmt / riskPerCntr, lotDecimals) : na
+float rrRatio     = slMult > 0 ? tpMult / slMult : 0.0
+
+// ═══════════════════════════════════════════════════════════════════════
+//                         3. STATE MACHINE
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── Trade State ──
+var int    inTrade      = 0
+var float  trail        = na
+var float  entryPrice   = na
+var int    entryBarNo   = 0
+var bool   beActive     = false
+var int    lockBarStart = -9999
+
+// ── Performance Statistics ──
+var int    totalTrades   = 0
+var int    winCount      = 0
+var int    lossCount     = 0
+var float  grossProfit   = 0.0
+var float  grossLoss     = 0.0
+var float  totalPnLPct   = 0.0
+var float  peakPnL       = 0.0
+var float  maxDDPct      = 0.0
+var int    consecLoss    = 0
+var int    maxConsecLoss = 0
+var float  bestTrade     = 0.0
+var float  worstTrade    = 0.0
+
+// ── Persistent Display ──
+var string lastSigTxt = "—"
+var color  lastSigClr = color.gray
+var string execAction = "MENUNGGU SINYAL"
+var float  execEntry  = na
+var float  execSL     = na
+var float  execTP     = na
+var color  execBgClr  = color.new(#8b949e, 85)
+var color  execTxtClr = #8b949e
+
+// ── Bar-local Flags ──
+bool  exitBuy   = false
+bool  exitSell  = false
+bool  entryBuy  = false
+bool  entrySell = false
+float exitPnL   = 0.0
+
+// ─── STEP A: EXIT (dulu — agar entry boleh same bar) ───
+if inTrade == 1
+    float m  = rsi > 75 ? tpMult : slMult
+    float nt = close - (safeATR * m)
+    if useBE and safeATR > 0 and not na(entryPrice)
+        float profitATR = (close - entryPrice) / safeATR
+        if profitATR >= beTrigger
+            beActive := true
+        if beActive
+            float beLevel = entryPrice + safeATR * beOffset
+            trail := math.max(nz(trail, beLevel), beLevel)
+    trail := math.max(nz(trail, nt), nt)
+    if close < trail
+        exitBuy    := true
+        exitPnL    := (close - entryPrice) / entryPrice * 100.0
+        inTrade    := 0
+        trail      := na
+        entryPrice := na
+        beActive   := false
+
+if inTrade == -1
+    float m  = rsi < 25 ? tpMult : slMult
+    float nt = close + (safeATR * m)
+    if useBE and safeATR > 0 and not na(entryPrice)
+        float profitATR = (entryPrice - close) / safeATR
+        if profitATR >= beTrigger
+            beActive := true
+        if beActive
+            float beLevel = entryPrice - safeATR * beOffset
+            trail := math.min(nz(trail, beLevel), beLevel)
+    trail := math.min(nz(trail, nt), nt)
+    if close > trail
+        exitSell   := true
+        exitPnL    := (entryPrice - close) / entryPrice * 100.0
+        inTrade    := 0
+        trail      := na
+        entryPrice := na
+        beActive   := false
+
+// ─── Update Stats (SEBELUM entry — agar lockout langsung aktif) ───
+if exitBuy or exitSell
+    totalTrades += 1
+    totalPnLPct += exitPnL
+    if exitPnL >= 0
+        winCount    += 1
+        grossProfit += exitPnL
+        consecLoss  := 0
+    else
+        lossCount   += 1
+        grossLoss   += math.abs(exitPnL)
+        consecLoss  += 1
+        maxConsecLoss := math.max(maxConsecLoss, consecLoss)
+        lockBarStart  := bar_index
+    bestTrade  := math.max(bestTrade, exitPnL)
+    worstTrade := math.min(worstTrade, exitPnL)
+    if totalPnLPct > peakPnL
+        peakPnL := totalPnLPct
+    float dd = peakPnL - totalPnLPct
+    maxDDPct := math.max(maxDDPct, dd)
+
+// ─── Lockout Check (setelah stats update — consecLoss sudah terbaru) ───
+bool isLocked = useLossLock and consecLoss >= maxLossLock and (bar_index - lockBarStart) < lockBars
+
+// ─── STEP B: ENTRY ───
+bool canEntry = inTrade == 0 and not isLocked and inSession and volOK
+if canEntry
+    if signalBuy and htfBull
+        entryBuy   := true
+        inTrade    := 1
+        trail      := close - (safeATR * slMult)
+        entryPrice := close
+        entryBarNo := bar_index
+        beActive   := false
+    else if signalSell and htfBear
+        entrySell  := true
+        inTrade    := -1
+        trail      := close + (safeATR * slMult)
+        entryPrice := close
+        entryBarNo := bar_index
+        beActive   := false
+
+// ─── Update Last Signal (persistent) ───
+if entryBuy
+    lastSigTxt := exitBuy ? "CLOSE->BUY" : "BUY"
+    lastSigClr := #00e676
+else if entrySell
+    lastSigTxt := exitSell ? "CLOSE->SELL" : "SELL"
+    lastSigClr := #ff1744
+else if exitBuy
+    lastSigTxt := "CLOSE BUY"
+    lastSigClr := #ffd600
+else if exitSell
+    lastSigTxt := "CLOSE SELL"
+    lastSigClr := #ffd600
+
+// ─── Update Execution Signal ───
+if entryBuy
+    execAction := "EKSEKUSI BUY"
+    execEntry  := close
+    execSL     := close - safeATR * slMult
+    execTP     := close + safeATR * tpMult
+    execBgClr  := color.new(#00e676, 50)
+    execTxtClr := color.white
+else if entrySell
+    execAction := "EKSEKUSI SELL"
+    execEntry  := close
+    execSL     := close + safeATR * slMult
+    execTP     := close - safeATR * tpMult
+    execBgClr  := color.new(#ff1744, 50)
+    execTxtClr := color.white
+else if exitBuy
+    execAction := "TUTUP BUY"
+    execEntry  := close
+    execSL     := na
+    execTP     := na
+    execBgClr  := color.new(#ffd600, 50)
+    execTxtClr := color.black
+else if exitSell
+    execAction := "TUTUP SELL"
+    execEntry  := close
+    execSL     := na
+    execTP     := na
+    execBgClr  := color.new(#ffd600, 50)
+    execTxtClr := color.black
+else if inTrade == 1
+    execAction := "HOLD LONG"
+    execSL     := trail
+    execBgClr  := color.new(#00e676, 85)
+    execTxtClr := #00e676
+else if inTrade == -1
+    execAction := "HOLD SHORT"
+    execSL     := trail
+    execBgClr  := color.new(#ff1744, 85)
+    execTxtClr := #ff1744
+else if isLocked
+    int remain   = lockBars - (bar_index - lockBarStart)
+    execAction   := "LOCKED (" + str.tostring(math.max(0, remain)) + " bars)"
+    execBgClr    := color.new(#ff6d00, 50)
+    execTxtClr   := #ff6d00
+else
+    execAction := "MENUNGGU SINYAL"
+    execEntry  := na
+    execSL     := na
+    execTP     := na
+    execBgClr  := color.new(#8b949e, 85)
+    execTxtClr := #8b949e
+
+// ═══════════════════════════════════════════════════════════════════════
+//                     4. PLOTS & CANDLE COLOR
+// ═══════════════════════════════════════════════════════════════════════
+plot(useFilter ? baseEMA : na, "EMA 200", color.white, 2)
+plot(fastEMA, "Fast EMA", color.aqua, 2)
+plot(slowEMA, "Slow EMA", color.orange, 2)
+plot(inTrade != 0 ? trail : na, "Trail", color.red, 2, style=plot.style_linebr)
+barcolor(useBarColor ? (inTrade == 1 ? #00c853 : inTrade == -1 ? #ff1744 : na) : na)
+
+// ═══════════════════════════════════════════════════════════════════════
+//                   5. CHART LABELS (anti-overlap)
+// ═══════════════════════════════════════════════════════════════════════
+lblSz = f_sz(lblSize)
+
+if showLabels
+    if entryBuy
+        label.new(bar_index, low, " BUY ", style=label.style_label_up, yloc=yloc.belowbar, color=#00e676, textcolor=color.black, size=lblSz)
+    if entrySell
+        label.new(bar_index, high, " SELL ", style=label.style_label_down, yloc=yloc.abovebar, color=#ff1744, textcolor=color.white, size=lblSz)
+    if exitBuy
+        label.new(bar_index, high + safeATR * 0.8, "CLOSE BUY", style=label.style_label_down, color=#ffd600, textcolor=color.black, size=lblSz)
+    if exitSell
+        label.new(bar_index, low - safeATR * 0.8, "CLOSE SELL", style=label.style_label_up, color=#ffd600, textcolor=color.black, size=lblSz)
+
+// ═══════════════════════════════════════════════════════════════════════
+//            6. DASHBOARD — MONITORING + RISK + STATS + EKSEKUSI
+// ═══════════════════════════════════════════════════════════════════════
+dSz = f_sz(dashSz)
+
+var table dash = table.new(f_pos(dashPos), columns=2, rows=24, bgcolor=color.new(#0d1117, 5), border_width=1, border_color=color.new(#30363d, 0), frame_width=2, frame_color=color.new(#58a6ff, 0))
+
+if showDash and barstate.islast
+
+    // ══════════════════ MONITORING ══════════════════
+
+    // ── Row 0: Header ──
+    table.cell(dash, 0, 0, " TRENDER ULTIMATE ",
+        text_color=color.white, text_size=dSz,
+        bgcolor=color.new(#1f6feb, 20), text_halign=text.align_center)
+    table.cell(dash, 1, 0, " v3.0 ",
+        text_color=#8b949e, text_size=dSz,
+        bgcolor=color.new(#1f6feb, 20), text_halign=text.align_center)
+
+    // ── Row 1: Timeframe + Session ──
+    string sessStr = useSession ? (inSession ? "ACTIVE" : "CLOSED") : "OFF"
+    color  sessClr = useSession ? (inSession ? #00e676 : #ff1744) : #8b949e
+    table.cell(dash, 0, 1, " Timeframe ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 1, " " + tfMode + " | Sess:" + sessStr + " ",
+        text_color=sessClr, text_size=dSz)
+
+    // ── Row 2: Position + Bars ──
+    string posTxt = inTrade == 1 ? "LONG" : inTrade == -1 ? "SHORT" : "FLAT"
+    color  posClr = inTrade == 1 ? #00e676 : inTrade == -1 ? #ff1744 : #8b949e
+    int    barsIn = inTrade != 0 ? bar_index - entryBarNo : 0
+    table.cell(dash, 0, 2, " Position ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 2, " " + posTxt + (inTrade != 0 ? " (" + str.tostring(barsIn) + " bars)" : "") + " ",
+        text_color=posClr, text_size=dSz, bgcolor=color.new(posClr, 88))
+
+    // ── Row 3: Entry + Trail ──
+    table.cell(dash, 0, 3, " Entry / Trail ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 3, " " + (na(entryPrice) ? "N/A" : str.tostring(entryPrice, format.mintick)) + " / " + (inTrade != 0 and not na(trail) ? str.tostring(trail, format.mintick) : "N/A") + " ",
+        text_color=color.white, text_size=dSz)
+
+    // ── Row 4: Unrealized P&L ──
+    float pnlRaw = inTrade != 0 and not na(entryPrice) ? (close - entryPrice) / entryPrice * 100.0 : 0.0
+    float pnlPct = inTrade == -1 ? -pnlRaw : pnlRaw
+    color  pnlClr = pnlPct >= 0 ? #00e676 : #ff1744
+    table.cell(dash, 0, 4, " Unrealized P&L ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 4, " " + (pnlPct >= 0 ? "+" : "") + str.tostring(pnlPct, "#.##") + "% ",
+        text_color=pnlClr, text_size=dSz)
+
+    // ── Row 5: RSI + ADX ──
+    string adxStr = str.tostring(adxVal, "#.#") + (adxVal > adxThresh ? " OK" : " WEAK")
+    table.cell(dash, 0, 5, " RSI / ADX ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 5, " RSI:" + str.tostring(rsi, "#.#") + " | ADX:" + adxStr + " ",
+        text_color=color.white, text_size=dSz)
+
+    // ── Row 6: ATR + Trend ──
+    string trdTxt = useFilter ? (close > baseEMA ? "BULL" : close < baseEMA ? "BEAR" : "NEUTRAL") : "OFF"
+    color  trdClr = useFilter ? (close > baseEMA ? #00e676 : close < baseEMA ? #ff1744 : #8b949e) : #8b949e
+    table.cell(dash, 0, 6, " ATR / Trend ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 6, " " + str.tostring(atr, format.mintick) + " | " + trdTxt + " ",
+        text_color=trdClr, text_size=dSz)
+
+    // ── Row 7: HTF + Volatility ──
+    string htfStr = useHTF ? (htfFast > htfSlow ? "BULL" : htfFast < htfSlow ? "BEAR" : "—") : "OFF"
+    string volStr = useVolFilter ? (volOK ? "NORMAL" : "LOW") : "OFF"
+    color  volClr = useVolFilter ? (volOK ? #00e676 : #ff6d00) : #8b949e
+    table.cell(dash, 0, 7, " HTF / Vol ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 7, " HTF:" + htfStr + " | Vol:" + volStr + " ",
+        text_color=volClr, text_size=dSz)
+
+    // ── Row 8: Break-Even + SL/TP Mult ──
+    string beStr = inTrade != 0 ? (beActive ? "ACTIVE" : "WAITING") : (useBE ? "—" : "OFF")
+    color  beClr = beActive ? #00e676 : #8b949e
+    table.cell(dash, 0, 8, " BE / SL-TP ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 8, " BE:" + beStr + " | " + str.tostring(slMult, "#.#") + " / " + str.tostring(tpMult, "#.#") + " ",
+        text_color=beClr, text_size=dSz)
+
+    // ── Row 9: Last Signal ──
+    table.cell(dash, 0, 9, " Last Signal ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 9, " " + lastSigTxt + " ",
+        text_color=lastSigClr, text_size=dSz, bgcolor=color.new(lastSigClr, 88))
+
+    // ══════════════════ RISK MANAGEMENT ══════════════════
+
+    // ── Row 10: Separator ──
+    table.cell(dash, 0, 10, " — RISK MANAGEMENT — ",
+        text_color=color.white, text_size=dSz,
+        bgcolor=color.new(#e65100, 60), text_halign=text.align_center)
+    table.cell(dash, 1, 10, " ",
+        bgcolor=color.new(#e65100, 60))
+
+    // ── Row 11: Risk + Lot Size ──
+    table.cell(dash, 0, 11, " Risk / Lots ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 11, " " + str.tostring(riskPct, "#.#") + "% $" + str.tostring(riskAmt, "#.##") + " | " + (na(calcLotSize) ? "N/A" : str.tostring(calcLotSize, "#.####")) + " lot ",
+        text_color=color.orange, text_size=dSz)
+
+    // ── Row 12: SL Dist + R:R ──
+    table.cell(dash, 0, 12, " SL Dist / R:R ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 12, " " + str.tostring(slDistTicks, "#.#") + " ticks | 1:" + str.tostring(rrRatio, "#.##") + " ",
+        text_color=color.white, text_size=dSz)
+
+    // ── Row 13: Loss Protection ──
+    string lockStr = isLocked ? "LOCKED (" + str.tostring(math.max(0, lockBars - (bar_index - lockBarStart))) + " bars)" : (consecLoss > 0 ? str.tostring(consecLoss) + "/" + str.tostring(maxLossLock) + " WARN" : "OK")
+    color  lockClr = isLocked ? #ff6d00 : consecLoss > 0 ? #ffd600 : #00e676
+    table.cell(dash, 0, 13, " Loss Protection ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 13, " " + lockStr + " ",
+        text_color=lockClr, text_size=dSz)
+
+    // ══════════════════ PERFORMANCE STATS ══════════════════
+
+    // ── Row 14: Separator ──
+    table.cell(dash, 0, 14, " — PERFORMANCE STATS — ",
+        text_color=color.white, text_size=dSz,
+        bgcolor=color.new(#7b1fa2, 60), text_halign=text.align_center)
+    table.cell(dash, 1, 14, " ",
+        bgcolor=color.new(#7b1fa2, 60))
+
+    // ── Row 15: Trades + Win Rate ──
+    float winRate = totalTrades > 0 ? (winCount / totalTrades) * 100.0 : 0.0
+    color  wrClr  = totalTrades == 0 ? #8b949e : winRate >= 50 ? #00e676 : #ff1744
+    table.cell(dash, 0, 15, " Trades / Win% ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 15, " " + str.tostring(totalTrades) + " trades | " + str.tostring(winRate, "#.#") + "% (" + str.tostring(winCount) + "W/" + str.tostring(lossCount) + "L) ",
+        text_color=wrClr, text_size=dSz)
+
+    // ── Row 16: Profit Factor + Total PnL ──
+    float pf         = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 999.0 : 0.0)
+    color  pfClr     = totalTrades == 0 ? #8b949e : pf >= 1.0 ? #00e676 : #ff1744
+    color  pnLClr    = totalTrades == 0 ? #8b949e : totalPnLPct >= 0 ? #00e676 : #ff1744
+    table.cell(dash, 0, 16, " PF / Total PnL ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 16, " PF:" + str.tostring(pf, "#.##") + " | " + (totalPnLPct >= 0 ? "+" : "") + str.tostring(totalPnLPct, "#.##") + "% ",
+        text_color=pnLClr, text_size=dSz)
+
+    // ── Row 17: Max Drawdown + Consecutive Loss ──
+    table.cell(dash, 0, 17, " MaxDD / ConsecLoss ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 17, " -" + str.tostring(maxDDPct, "#.##") + "% | " + str.tostring(consecLoss) + " cur (max:" + str.tostring(maxConsecLoss) + ") ",
+        text_color=#ff8a80, text_size=dSz)
+
+    // ── Row 18: Best + Worst Trade ──
+    table.cell(dash, 0, 18, " Best / Worst ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 18, " " + (bestTrade >= 0 ? "+" : "") + str.tostring(bestTrade, "#.##") + "% / " + (worstTrade >= 0 ? "+" : "") + str.tostring(worstTrade, "#.##") + "% ",
+        text_color=color.white, text_size=dSz)
+
+    // ══════════════════ EKSEKUSI ORDER ══════════════════
+
+    // ── Row 19: Separator ──
+    table.cell(dash, 0, 19, " — EKSEKUSI ORDER — ",
+        text_color=color.white, text_size=dSz,
+        bgcolor=color.new(#58a6ff, 65), text_halign=text.align_center)
+    table.cell(dash, 1, 19, " ",
+        bgcolor=color.new(#58a6ff, 65))
+
+    // ── Row 20: SIGNAL (paling menonjol) ──
+    table.cell(dash, 0, 20, " SIGNAL ",
+        text_color=color.white, text_size=dSz, bgcolor=execBgClr)
+    table.cell(dash, 1, 20, "  " + execAction + "  ",
+        text_color=execTxtClr, text_size=dSz, bgcolor=execBgClr)
+
+    // ── Row 21: Entry + SL ──
+    table.cell(dash, 0, 21, " Entry / SL ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 21, " " + (na(execEntry) ? "—" : str.tostring(execEntry, format.mintick)) + " / " + (na(execSL) ? "—" : str.tostring(execSL, format.mintick)) + " ",
+        text_color=color.white, text_size=dSz)
+
+    // ── Row 22: TP (Ref) + R:R ──
+    table.cell(dash, 0, 22, " TP (Ref) / R:R ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 22, " " + (na(execTP) ? "—" : str.tostring(execTP, format.mintick)) + " | 1:" + str.tostring(rrRatio, "#.##") + " ",
+        text_color=#69f0ae, text_size=dSz)
+
+    // ── Row 23: Konfirmasi Checklist ──
+    string emaConf = isCrossUp ? "EMA:CrossUp" : isCrossDn ? "EMA:CrossDn" : isEMAUp ? "EMA:Bull" : "EMA:Bear"
+    string rsiConf = "RSI:" + str.tostring(rsi, "#.#") + (rsi > 50 ? "(B)" : "(S)")
+    string trdConf = useFilter ? (close > baseEMA ? "Trend:Bull" : close < baseEMA ? "Trend:Bear" : "Trend:—") : "Trend:OFF"
+    string adxConf = "ADX:" + str.tostring(adxVal, "#.#") + (adxVal > adxThresh ? "(OK)" : "(Wk)")
+    bool   allBullOK = (rsi > 50) and (close > baseEMA or not useFilter) and adxOk
+    bool   allBearOK = (rsi < 50) and (close < baseEMA or not useFilter) and adxOk
+    color  confClr   = allBullOK or allBearOK ? #69f0ae : #8b949e
+    table.cell(dash, 0, 23, " Konfirmasi ",
+        text_color=#8b949e, text_size=dSz)
+    table.cell(dash, 1, 23, " " + emaConf + " | " + rsiConf + "  " + trdConf + " | " + adxConf + " ",
+        text_color=confClr, text_size=dSz)
+
+// ═══════════════════════════════════════════════════════════════════════
+//                           7. ALERTS
+// ═══════════════════════════════════════════════════════════════════════
+alertcondition(entryBuy,  "OPEN BUY",    "[Trender] BUY {{ticker}} {{interval}} @ {{close}}")
+alertcondition(entrySell, "OPEN SELL",   "[Trender] SELL {{ticker}} {{interval}} @ {{close}}")
+alertcondition(exitBuy,   "CLOSE BUY",   "[Trender] CLOSE BUY {{ticker}} {{interval}} @ {{close}}")
+alertcondition(exitSell,  "CLOSE SELL",  "[Trender] CLOSE SELL {{ticker}} {{interval}} @ {{close}}")
